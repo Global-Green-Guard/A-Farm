@@ -51,15 +51,19 @@ export function getPlatformPrivateKey(): PrivateKey {
     return PrivateKey.fromStringECDSA(privateKeyString);
 }
 
-
 export function getHcsTopicId(): TopicId {
     const topicIdString = process.env.AGRITRUST_HCS_TOPIC_ID;
-    if (!topicIdString || topicIdString === '0.0.PLACEHOLDER_TOPIC_ID') {
-        console.warn("AGRITRUST_HCS_TOPIC_ID is not set or is a placeholder. Using dummy value.");
-        return TopicId.fromString("0.0.123"); // Return dummy/throw error
-        // throw new Error("AGRITRUST_HCS_TOPIC_ID not set in environment variables.");
+    if (!topicIdString) {
+        // Throw error if not set at all
+        throw new Error("AGRITRUST_HCS_TOPIC_ID not set in environment variables.");
     }
-    return TopicId.fromString(topicIdString);
+    try {
+         return TopicId.fromString(topicIdString);
+    } catch (parseError) {
+         // Throw error if the format is wrong
+         console.error(`Failed to parse AGRITRUST_HCS_TOPIC_ID: ${topicIdString}`, parseError);
+         throw new Error(`Invalid format for AGRITRUST_HCS_TOPIC_ID in environment variables.`);
+    }
 }
 
 export function getNftTokenId(): TokenId {

@@ -1,6 +1,10 @@
 // app/api/farmer/batches/route.ts
 import { NextResponse, NextRequest } from 'next/server';
+import { revalidatePath } from 'next/cache';
+import { Prisma } from '@prisma/client'; // Import Prisma namespace
+import prisma from '@/lib/prisma'; // Import the Prisma client instance
 import { Batch } from '@/types';
+import { revalidateTag } from 'next/cache';
 import { v4 as uuidv4 } from 'uuid';
 import {
     getHederaClient,
@@ -17,210 +21,155 @@ import {
     TransferTransaction
 } from '@hashgraph/sdk';
 
-// --- TODO: Replace with actual database interactions ---
-const MOCK_BATCHES: Batch[] = [
-    { id: 'B007', productId: 'prod_tomato', productName: 'Roma Tomatoes', quantity: 500, unit: 'KG', status: 'Registered', creationDate: new Date(Date.now() - 3600 * 1000).toISOString(), imageUrl: '/placeholder-tomato.jpg' },
-    { id: 'B006', productId: 'prod_carrot', productName: 'Nantes Carrots', quantity: 200, unit: 'KG', status: 'Needs Attention', creationDate: new Date(Date.now() - 1.5 * 86400 * 1000).toISOString() },
-    { id: 'B005', productId: 'prod_apple', productName: 'Gala Apples', quantity: 150, unit: 'Boxes', status: 'Certified', creationDate: new Date(Date.now() - 2 * 86400 * 1000).toISOString(), nftId: '0.0.12345/3' },
-];
-// Function to add a batch (replace with DB insert)
-function addMockBatch(batch: Batch) { MOCK_BATCHES.unshift(batch); }
-// --- End Simulation ---
 
 
 // --- GET Handler ---
 export async function GET(request: Request) {
-    // TODO: Implement Authentication
-    // const farmerId = await getFarmerIdFromSession(request);
-    // if (!farmerId) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
+    // TODO: Implement Authentication and get farmerId
+    const farmerId = "0.0.5768282"; // Replace with authenticated farmer ID later
 
     try {
-        // TODO: Fetch batches for the specific farmerId from the database
-        const batches = MOCK_BATCHES; // Replace with DB Query
-        return NextResponse.json(batches);
+        const batches = await prisma.batch.findMany({
+            where: {
+                farmerAccountId: farmerId, // Filter by farmer
+            },
+            orderBy: {
+                creationDate: 'desc', // Show newest first
+            },
+        });
+
+        // Convert BigInt to string for JSON serialization if needed (Prisma might handle this)
+        // Or handle on the frontend if necessary
+        const serializedBatches = batches.map(batch => ({
+            ...batch,
+            hcsSequenceNumber: batch.hcsSequenceNumber?.toString(), // Convert BigInt to string
+        }));
+
+
+        return NextResponse.json(serializedBatches);
     } catch (error) {
-        console.error("Error fetching batches:", error);
+        console.error("Error fetching batches from DB:", error);
         return NextResponse.json({ error: 'Failed to fetch batches' }, { status: 500 });
     }
 }
 
-
 // --- POST Handler (Batch Registration) ---
 export async function POST(request: NextRequest) {
-    // TODO: Implement Authentication
-    // const farmerId = await getFarmerIdFromSession(request);
-    // if (!farmerId) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
-    const farmerAccountIdString = "0.0.5768282"; // TODO: Get actual farmer account ID
+    // TODO: Implement Authentication and get farmerId/farmerAccountIdString
+    const farmerAccountIdString = "0.0.5768282"; // Use authenticated ID later
 
-    let client;
+    let client; // Hedera client
     try {
         const body = await request.json();
 
-        // --- Basic Input Validation (Add more robust validation) ---
+        // --- Basic Input Validation ---
         if (!body.productName || !body.quantity || !body.unit) {
             return NextResponse.json({ error: 'Missing required fields' }, { status: 400 });
         }
 
-        const batchId = `B-${uuidv4().slice(0, 8).toUpperCase()}`; // Generate unique batch ID
-        const creationDate = new Date().toISOString();
-        const placeholderIpfsCid = "bafybe...placeholder"; // TODO: Integrate real IPFS upload
+        const batchId = `B-${uuidv4().slice(0, 8).toUpperCase()}`;
+        const creationDate = new Date(); // Use Date object
 
-        // --- Initialize Hedera Client ---
+        // --- Hedera Client & Transactions ---
         client = getHederaClient();
         const platformAccountId = getPlatformAccountId();
         const platformPrivateKey = getPlatformPrivateKey();
         const hcsTopicId = getHcsTopicId();
+        console.log(">>> Using HCS Topic ID:", hcsTopicId.toString()); // DEBUG LOG
         const nftTokenId = getNftTokenId();
+        console.log(">>> Using NFT Token ID:", nftTokenId.toString()); // DEBUG LOG
 
         // --- 1. Submit Batch Creation Event to HCS ---
-        const hcsMessage = JSON.stringify({
-            eventId: uuidv4(),
-            eventType: "BATCH_CREATED",
-            batchId: batchId,
-            timestamp: creationDate,
-            farmerAccountId: farmerAccountIdString, // TODO: Use authenticated farmer's account ID
-            product: {
-                name: body.productName,
-                quantity: body.quantity,
-                unit: body.unit,
-                // Add other product details from body
-            },
-            ipfsCid: placeholderIpfsCid
-        });
-
+        // ... (HCS message creation - ensure timestamp is ISO string or handle conversion) ...
+        const hcsMessage = JSON.stringify({ /* ... HCS payload ... */ timestamp: creationDate.toISOString() });
         const hcsSubmitTx = await new TopicMessageSubmitTransaction({
-            topicId: hcsTopicId,
+            topicId: hcsTopicId, // <-- Make sure this variable is used here
             message: hcsMessage,
-        })
-        .setMaxChunks(1) // Keep messages small for simplicity
-        .freezeWith(client) // Freeze for signing with platform key
-        .sign(platformPrivateKey);
+        }).freezeWith(client).sign(platformPrivateKey);
 
         const hcsSubmitRx = await hcsSubmitTx.execute(client);
         const hcsReceipt = await hcsSubmitRx.getReceipt(client);
-        const hcsSequenceNumber = hcsReceipt.topicSequenceNumber; // Store this!
-
+        const hcsSequenceNumber = hcsReceipt.topicSequenceNumber; // This is BigInt | null
         console.log(`HCS Message Submitted: Sequence Number ${hcsSequenceNumber}`);
 
-
         // --- Prepare Off-Chain Metadata JSON ---
-        const offChainMetadata = {
-            name: `Batch ${batchId} - ${body.productName}`,
-            description: `AgriTrust registered batch of ${body.productName}`,
-            image: `ipfs://${placeholderIpfsCid}`, // Link to the IMAGE file on IPFS
-            creator: "AgriTrust Platform",
-            type: "AgriTrust Batch",
-            properties: {
-                batchId: batchId,
-                hcsTopicId: hcsTopicId.toString(),
-                hcsInitialSequence: hcsSequenceNumber?.toString(),
-                farmerAccountId: farmerAccountIdString,
-                productType: body.productName,
-                quantity: body.quantity,
-                unit: body.unit,
-                creationTimestamp: creationDate
-            },
-            // You can add more detailed attributes here following HIP-412 if desired
-        };
-        
-        // --- TODO: Upload offChainMetadata JSON to IPFS ---
-        // const offChainJsonString = JSON.stringify(offChainMetadata);
-        // const offChainIpfsCid = await uploadToIpfs(offChainJsonString); // Implement this function
-        const offChainIpfsCid = "bafkrei...placeholder_json_cid"; // Replace with real CID after upload
+        const offChainMetadata = { /* ... define metadata object ... */ };
+        // TODO: Upload JSON to IPFS
+        const offChainIpfsCid = "bafkrei...placeholder_json_cid"; // Placeholder JSON CID
 
+        // --- Create MINIMAL On-Chain Metadata ---
+        const nftMetadata = Buffer.from(`ipfs://${offChainIpfsCid}`);
+        console.log("NFT Metadata Buffer Length:", nftMetadata.length);
 
         // --- 2. Mint the Batch NFT ---
-        const nftMetadata = Buffer.from(`ipfs://${offChainIpfsCid}`);
-
-        // --- Check the buffer length (ADD THIS LINE FOR DEBUGGING) ---
-        console.log("NFT Metadata Buffer Length:", nftMetadata.length);
-        
-        // const nftMetadata = Buffer.from(JSON.stringify({
-        //     name: `Batch ${batchId} - ${body.productName}`, // <-- Potentially long
-        //     description: `AgriTrust registered batch of ${body.productName}`, // <-- Potentially long
-        //     image: `ipfs://${placeholderIpfsCid}`, // <-- Relatively long CID string
-        //     creator: "AgriTrust Platform",
-        //     type: "AgriTrust Batch",
-        //     properties: {
-        //         batchId: batchId,
-        //         hcsTopicId: hcsTopicId.toString(),
-        //         hcsInitialSequence: hcsSequenceNumber?.toString(),
-        //         farmerAccountId: farmerAccountIdString,
-        //         productType: body.productName, // <-- Repetitive
-        //         quantity: body.quantity,
-        //         unit: body.unit,
-        //         creationTimestamp: creationDate // <-- Long ISO date string
-        //     }
-        // }));
-
-        
-        // --- Create MINIMAL On-Chain Metadata (Just the link) ---
-        // Convert the IPFS CID of the JSON file to bytes. This MUST be <= 100 bytes.
-   
-        const mintTx = await new TokenMintTransaction({
-            tokenId: nftTokenId,
-            metadata: [nftMetadata], // Array of Buffers
-        })
-        .freezeWith(client)
-        .sign(platformPrivateKey); // Sign with the SUPPLY key (which we assume is the platform key here)
-
+        const mintTx = await new TokenMintTransaction({ tokenId: nftTokenId, metadata: [nftMetadata] }).freezeWith(client).sign(platformPrivateKey);
         const mintRx = await mintTx.execute(client);
         const mintReceipt = await mintRx.getReceipt(client);
-        const serialNumber = mintReceipt.serials[0]; // Get the serial number of the new NFT. Store this!
-
-        console.log(`NFT Minted: Token ID ${nftTokenId.toString()}, Serial Number ${serialNumber}`);
+        const serialNumber = mintReceipt.serials[0]; // This is Long/BigInt compatible
         const nftIdString = `${nftTokenId.toString()}/${serialNumber.toString()}`;
+        console.log(`NFT Minted: Token ID ${nftTokenId.toString()}, Serial Number ${serialNumber}`);
 
-        // --- (Optional) 3. Transfer NFT to Farmer ---
-        // Assumes farmer account is already associated with nftTokenId!
-        // TODO: Handle association if needed.
-        // const farmerAccountId = AccountId.fromString(farmerAccountIdString); // TODO: Use real ID
-        // const transferTx = await new TransferTransaction()
-        //     .addNftTransfer(nftTokenId, serialNumber, platformAccountId, farmerAccountId)
-        //     .freezeWith(client)
-        //     .sign(platformPrivateKey); // Platform signs to send
+        // --- (Skipping Self-Transfer Block as per previous step) ---
+        // --- 4. Store results in Database using Prisma ---
+        // Get the sequence number from the receipt (this is Long | null)
+        const hcsSequenceNumberLong = hcsReceipt.topicSequenceNumber;
 
-        // const transferRx = await transferTx.execute(client);
-        // await transferRx.getReceipt(client); // Wait for confirmation
+        // Convert Long | null to BigInt | null for Prisma
+        const hcsSequenceNumberForDb: bigint | null = hcsSequenceNumberLong !== null
+            ? BigInt(hcsSequenceNumberLong.toString()) // Convert Long -> String -> BigInt
+            : null;                                      // Handle null case
 
-        // console.log(`NFT ${nftIdString} transferred to Farmer ${farmerAccountIdString}`);
+        const createdBatch = await prisma.batch.create({
+            data: {
+                // id is generated by cuid() default
+                productName: body.productName,
+                quantity: parseInt(body.quantity, 10), // Ensure number
+                unit: body.unit,
+                status: 'Registered', // Initial status
+                creationDate: creationDate, // Store the Date object
+                imageUrl: `/placeholder-${body.productName.toLowerCase()}.jpg`, // Example placeholder
+                nftId: nftIdString,
+                hcsTopicId: hcsTopicId.toString(),
+                // Use the converted BigInt value
+                hcsSequenceNumber: hcsSequenceNumberForDb,
+                ipfsMetadataCid: offChainIpfsCid,
+                farmerAccountId: farmerAccountIdString,  // Store farmer ID
+                // productId: body.productId, // Add if available
+            }
+        });
 
+        console.log("Batch data saved to DB:", createdBatch.id);
 
-        // --- 4. Store results (Simulated) ---
-        const newBatch: Batch = {
-            id: batchId,
-            productId: body.productId || `prod-${body.productName.toLowerCase()}`, // Generate or get from body
-            productName: body.productName,
-            quantity: body.quantity,
-            unit: body.unit,
-            status: 'Registered',
-            creationDate: creationDate,
-            imageUrl: `/placeholder-${body.productName.toLowerCase()}.jpg`, // Placeholder image
-            nftId: nftIdString, // Store the NFT ID
-            // Store hcsSequenceNumber and ipfsCid in your real DB
+        // --- Invalidate Cache for the Batches Page ---
+        revalidatePath('/farmer/batches'); // <--- ADD THIS LINE
+        console.log("Cache revalidated for /farmer/batches");
+
+        // Convert BigInt and Date for response
+        const responseBatch = {
+            ...createdBatch,
+            hcsSequenceNumber: createdBatch.hcsSequenceNumber?.toString(),
+            creationDate: createdBatch.creationDate.toISOString(), // Ensure ISO string
         };
-        // TODO: Replace with actual DB insert
-        addMockBatch(newBatch);
 
         // --- 5. Return Success Response ---
-        return NextResponse.json(newBatch, { status: 201 }); // Return the newly created batch
+        return NextResponse.json(responseBatch, { status: 201 });
 
     } catch (error: any) {
         console.error("Batch Registration Failed:", error);
-        // Provide more specific error messages if possible
-        let errorMessage = 'Batch registration failed.';
-        if (error.message?.includes("INSUFFICIENT_TX_FEE")) {
-            errorMessage = "Insufficient HBAR balance on the platform account for transaction fees.";
-        } else if (error.message?.includes("INVALID_SIGNATURE")) {
-             errorMessage = "Invalid signature. Check platform private key.";
-        } else if (error.message?.includes("TOKEN_NOT_ASSOCIATED_TO_ACCOUNT")){
-             errorMessage = `Farmer account ${farmerAccountIdString} is not associated with Token ${process.env.AGRITRUST_NFT_TOKEN_ID}.`;
+        // ---> Check for Prisma-specific errors <---
+        if (error instanceof Prisma.PrismaClientKnownRequestError) {
+             if (error.code === 'P2002') { // Unique constraint failed
+                console.error("Prisma Unique constraint violation:", error.meta);
+                return NextResponse.json({ error: `Database unique constraint failed (e.g., duplicate NFT ID?).`, details: error.meta }, { status: 409 }); // Conflict
+             }
+             // Add other specific Prisma error codes if needed
         }
-        // ... other specific Hedera errors
-
-        return NextResponse.json({ error: errorMessage, details: error.message }, { status: 500 });
+        // ---> Fallback for Hedera or other errors <---
+        let errorMessage = 'Batch registration failed.';
+        // ... (keep existing Hedera error message checks) ...
+        return NextResponse.json({ error: errorMessage, details: error.message || error }, { status: 500 });
     } finally {
-         // Close the client if it was created
-        client?.close();
+         client?.close(); // Close Hedera client
+         // Prisma client managed by singleton, no need to close here
     }
 }

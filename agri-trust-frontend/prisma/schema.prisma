@@ -1,0 +1,30 @@
+// prisma/schema.prisma
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "sqlite" // Specifies SQLite
+  url      = env("DATABASE_URL") // Reads from .env or .env.local
+}
+
+// Define the Batch model
+model Batch {
+  id                String     @id @default(cuid()) // Unique CUID for primary key
+  productId         String?    // Optional product identifier
+  productName       String     // Name of the product
+  quantity          Int        // Quantity
+  unit              String     // Unit (e.g., KG, Boxes)
+  status            String     // Current status (Registered, Verifying, etc.)
+  creationDate      DateTime   @default(now()) // Timestamp when created
+  imageUrl          String?    // Optional link to product image
+  nftId             String?    @unique // Unique identifier for the NFT (e.g., 0.0.xxxx/serial)
+  hcsTopicId        String?    // HCS Topic ID used for this batch's events
+  hcsSequenceNumber BigInt?    // Starting HCS sequence number (can be large)
+  ipfsMetadataCid   String?    // CID of the off-chain metadata JSON on IPFS
+  farmerAccountId   String     // Hedera account ID of the farmer who registered it
+
+  // Add an index for faster querying by farmer later
+  @@index([farmerAccountId])
+}

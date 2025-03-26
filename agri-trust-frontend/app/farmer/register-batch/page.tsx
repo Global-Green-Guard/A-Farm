@@ -18,46 +18,54 @@ const RegisterBatchPage = () => {
     setIsLoading(true);
     setError(null);
     setSuccessMessage(null);
+    console.log("Submitting batch data:", { productName, quantity, unit }); // Log 1: Start
 
     try {
-      const response = await fetch('/api/farmer/batches', { // Relative URL works fine from client-side fetch
+      const response = await fetch('/api/farmer/batches', {
         method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          // TODO: Add Authorization header with JWT token when auth is implemented
-        },
-        body: JSON.stringify({
-          productName,
-          quantity: parseInt(quantity, 10), // Ensure quantity is a number
-          unit,
-          // TODO: Add fields for uploading images/docs -> requires different handling (multipart/form-data)
-        }),
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ productName, quantity: parseInt(quantity, 10), unit }),
       });
 
-      const result = await response.json();
+      console.log("Backend Response Status:", response.status); // Log 2: Status Code
 
       if (!response.ok) {
         // Handle API errors (e.g., validation, Hedera errors)
-        throw new Error(result.error || `Failed to register batch (Status: ${response.status})`);
+        const errorResult = await response.json().catch(() => ({ error: "Failed to parse error response" })); // Try parsing error
+        console.error("Backend returned error:", response.status, errorResult); // Log 3: Backend Error
+        throw new Error(errorResult.error || `Failed to register batch (Status: ${response.status})`);
       }
+
+      // --- Success Path ---
+      console.log("Backend response OK. Trying to parse JSON..."); // Log 4: Before JSON Parse
+
+      const result = await response.json(); // <--- Potential failure point
+
+      console.log("Backend JSON Result:", result); // Log 5: Parsed Result
 
       // Success!
       setSuccessMessage(`Batch ${result.id} registered successfully! NFT ID: ${result.nftId}`);
+      console.log("Success message set."); // Log 6: After Success Msg
+
       // Optionally clear the form
       setProductName('');
       setQuantity('');
       setUnit('KG');
+      console.log("Form cleared."); // Log 7: After Form Clear
+
       // Optionally redirect after a delay
       setTimeout(() => {
+        console.log("Initiating redirect..."); // Log 8: Before Redirect
         router.push('/farmer/batches'); // Redirect to batches list
-        router.refresh(); // Ensure the batches page re-fetches data
+        // router.refresh(); // Ensure the batches page re-fetches data
       }, 3000);
 
 
     } catch (err: any) {
-      console.error("Registration failed:", err);
+      console.error("!!!!!! Error caught in handleSubmit !!!!!!:", err); // Log 9: CATCH BLOCK
       setError(err.message || 'An unexpected error occurred.');
     } finally {
+      console.log("Setting isLoading to false."); // Log 10: Finally Block
       setIsLoading(false);
     }
   };
