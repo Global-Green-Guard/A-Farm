@@ -10,10 +10,13 @@
   },
   "dependencies": {
     "@hashgraph/sdk": "^2.61.0",
+    "@pinata/sdk": "^2.1.0",
     "@prisma/client": "^6.5.0",
+    "@types/formidable": "^3.4.5",
     "agri-trust-frontend": "file:",
     "date-fns": "^4.1.0",
     "dotenv": "^16.4.7",
+    "formidable": "^3.5.2",
     "next": "15.2.4",
     "react": "^19.0.0",
     "react-dom": "^19.0.0",
