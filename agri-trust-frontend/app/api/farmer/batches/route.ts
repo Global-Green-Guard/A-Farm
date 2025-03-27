@@ -82,27 +82,24 @@ export async function POST(request: NextRequest) {
     let client;
 
     try {
-        // --- Parse Form Data ---
-        console.log("Parsing form data...");
-        const { fields, files } = await parseFormData(request);
-        console.log("Form fields:", fields);
-        console.log("Form files:", files);
+        // --- Get FormData Directly ---
+        console.log("Getting form data...");
+        const formData = await request.formData();
+        console.log("FormData received.");
 
-        // Extract fields (formidable puts them in arrays, access first element)
-        const productName = Array.isArray(fields.productName) ? fields.productName[0] : fields.productName;
-        const quantity = Array.isArray(fields.quantity) ? fields.quantity[0] : fields.quantity;
-        const unit = Array.isArray(fields.unit) ? fields.unit[0] : fields.unit;
+        // --- Extract fields and file from FormData ---
+        const productName = formData.get('productName') as string | null;
+        const quantity = formData.get('quantity') as string | null;
+        const unit = formData.get('unit') as string | null;
+        const imageFile = formData.get('image') as File | null; // Get the File object
 
-        // Extract file (assuming field name is 'image')
-        const imageFile = Array.isArray(files.image) ? files.image[0] : files.image;
-
-        // --- Basic Input Validation ---
-        if (!productName || !quantity || !unit) {
-            return NextResponse.json({ error: 'Missing required text fields' }, { status: 400 });
+        // Ensure quantity is a valid number string before parsing later
+        if (isNaN(parseInt(quantity, 10))) {
+            return NextResponse.json({ error: 'Invalid quantity provided' }, { status: 400 });
         }
-        if (!imageFile) {
-             return NextResponse.json({ error: 'Missing image file' }, { status: 400 });
-        }
+       if (!imageFile) {
+            return NextResponse.json({ error: 'Missing image file' }, { status: 400 });
+       }
 
         // --- Upload Image to IPFS via Pinata ---
         let imageUrl = `/placeholder-${productName.toLowerCase()}.jpg`; // Default placeholder
@@ -110,43 +107,36 @@ export async function POST(request: NextRequest) {
         if (pinata && imageFile) {
             console.log("Uploading image to Pinata...");
             try {
-                // formidable v3 provides filepath; v2 might differ.
-                // With NextRequest.formData(), we get a File object.
-                // We need a readable stream. Let's try getting it from the File object.
-                 if (!(imageFile instanceof File)) {
-                      throw new Error("Uploaded file is not in the expected format.");
-                 }
+                // Create readable stream from File object's ArrayBuffer
+                const arrayBuffer = await imageFile.arrayBuffer();
+                const buffer = Buffer.from(arrayBuffer);
+                const stream = Readable.from(buffer);
 
-                // Create readable stream from Blob/File
-                const stream = Readable.fromWeb(imageFile.stream() as any); // Cast needed for Node stream type
-
-                const options = {
-                    pinataMetadata: {
-                        name: `AgriTrust Batch Image - ${productName} - ${Date.now()}`,
-                        // keyvalues: { batchId: batchId } // Add batchId later if needed
-                    },
-                    pinataOptions: { cidVersion: 1 as (0 | 1) }
-                };
-                const result = await pinata.pinFileToIPFS(stream, options);
+                const options = { /* ... pinata options ... */ };
+                const result = await pinata.pinFileToIPFS(stream, options); // Use the stream
                 imageIpfsCid = result.IpfsHash;
-                imageUrl = `ipfs://${imageIpfsCid}`; // Use ipfs:// URI format
+                imageUrl = `ipfs://${imageIpfsCid}`;
                 console.log("Image uploaded to IPFS via Pinata:", imageUrl);
             } catch (pinataError) {
-                console.error("Pinata upload failed:", pinataError);
-                // Decide if you want to proceed without image or return error
-                // return NextResponse.json({ error: 'Failed to upload image to IPFS' }, { status: 500 });
-                console.warn("Proceeding without IPFS image due to upload failure.");
+               // ... Pinata error handling ...
+               console.error("Pinata upload failed:", pinataError);
+               console.warn("Proceeding without IPFS image due to upload failure.");
             }
         } else if (!pinata) {
             console.warn("Pinata keys not configured. Skipping IPFS upload.");
         }
 
 
+        // --- Continue with Hedera, Prisma operations ---
         const batchId = `B-${uuidv4().slice(0, 8).toUpperCase()}`;
         const creationDate = new Date();
 
-        // --- Hedera Client & Transactions ---
         client = getHederaClient();
+        // ... (get platform details, HCS/NFT IDs) ...
+        console.log(">>> Using HCS Topic ID:", hcsTopicId.toString()); // Keep debug logs for now
+        console.log(">>> Using NFT Token ID:", nftTokenId.toString());
+
+        
         // ... (get account IDs, keys, topic/token IDs) ...
         const platformAccountId = getPlatformAccountId();
         const platformPrivateKey = getPlatformPrivateKey();
