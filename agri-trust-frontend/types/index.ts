@@ -4,7 +4,7 @@ export interface Stat {
     id: string;
     title: string;
     value: string | number;
-    icon?: React.ReactNode; // Optional: For an icon component
+    icon?: string; // Optional: For an icon component
   }
   
   export type BatchStatus = 'Registered' | 'Verifying' | 'Certified' | 'Listed' | 'In Transit' | 'Sold' | 'Needs Attention';

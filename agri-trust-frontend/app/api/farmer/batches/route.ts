@@ -2,11 +2,10 @@
 import { NextResponse, NextRequest } from 'next/server';
 import { revalidatePath } from 'next/cache';
 import prisma from '@/lib/prisma';
+import { Readable } from 'stream'; 
 import { Prisma } from '@prisma/client';
 import { v4 as uuidv4 } from 'uuid';
-import { IncomingForm, File, Fields, Files } from 'formidable'; // Import formidable types
-import fs from 'fs'; // Import Node.js fs module
-import pinataSDK from '@pinata/sdk'; // Import Pinata SDK
+import pinataSDK from '@pinata/sdk'; // Correctly import the default export
 import {
     getHederaClient,
     getPlatformAccountId,
@@ -20,166 +19,144 @@ import {
     AccountId,
     // TransferTransaction // Not currently used
 } from '@hashgraph/sdk';
-import { Readable } from 'stream'; // Import Readable stream type
+// No need for Readable stream if Pinata SDK handles Buffer/ArrayBuffer
 
 // --- Initialize Pinata ---
+// Ensure these are set in your .env.local or .env file
 const pinataApiKey = process.env.PINATA_API_KEY;
 const pinataSecretApiKey = process.env.PINATA_SECRET_API_KEY;
-if (!pinataApiKey || !pinataSecretApiKey) {
-    console.warn("Pinata API Keys not found in environment variables. IPFS upload will fail.");
-}
+
+// Initialize Pinata SDK only if keys are present
 const pinata = pinataApiKey && pinataSecretApiKey ? new pinataSDK(pinataApiKey, pinataSecretApiKey) : null;
 
-// --- Helper to parse Form Data ---
-// Note: This uses formidable v3 syntax. Adjust if using v2.
-async function parseFormData(req: NextRequest): Promise<{ fields: Fields; files: Files }> {
-  return new Promise((resolve, reject) => {
-    const form = new IncomingForm({ multiples: false }); // Handle single file for 'image'
-
-    // formidable needs the raw request, which isn't directly available in App Router API routes.
-    // We need to adapt. Let's try getting the form data directly.
-    // This part might be tricky with Next.js App Router edge runtime, might need adjustments or alternative library.
-    // Let's assume standard Node.js runtime for now.
-
-    // WORKAROUND: Try reading FormData directly from NextRequest
-     req.formData()
-       .then(formData => {
-           const fields: Fields<string> = {};
-           const files: Files<string> = {};
-           const filePromises: Promise<void>[] = [];
-
-           formData.forEach((value, key) => {
-               if (value instanceof File) {
-                   // formidable expects properties like filepath, originalFilename etc.
-                   // Let's adapt the structure or handle the File object directly later.
-                    files[key] = value as any; // Store the File object, cast to any for now
-               } else {
-                    // Collect field values, handling potential multiple values if needed
-                    const existing = fields[key];
-                    if (existing) {
-                         if (Array.isArray(existing)) {
-                            existing.push(value);
-                         } else {
-                            fields[key] = [existing, value];
-                         }
-                    } else {
-                         fields[key] = value;
-                    }
-               }
-           });
-           resolve({ fields: fields as Fields, files: files as Files });
-
-       })
-       .catch(err => reject(err));
-  });
+if (!pinata) {
+    console.warn("Pinata API Keys not found or incomplete in environment variables. IPFS image upload will be skipped.");
 }
-
 
 // --- POST Handler (Batch Registration) ---
 export async function POST(request: NextRequest) {
-    // TODO: Authentication
-    const farmerAccountIdString = "0.0.5768282";
-    let client;
+    // TODO: Authentication check to get real farmerAccountIdString
+    const farmerAccountIdString = "0.0.5768282"; // Hardcoded for now
+    let client; // Hedera client
+    let imageIpfsCid = "bafybei...placeholder_image_cid"; // Default placeholder
+    let imageUrl = `ipfs://${imageIpfsCid}`; // Default placeholder URL
 
     try {
-        // --- Get FormData Directly ---
+        // --- Read FormData Directly ---
         console.log("Getting form data...");
         const formData = await request.formData();
         console.log("FormData received.");
 
-        // --- Extract fields and file from FormData ---
+        // --- Get Form Fields ---
         const productName = formData.get('productName') as string | null;
-        const quantity = formData.get('quantity') as string | null;
+        const quantityString = formData.get('quantity') as string | null;
         const unit = formData.get('unit') as string | null;
-        const imageFile = formData.get('image') as File | null; // Get the File object
+        const imageFile = formData.get('image') as File | null; // Assuming input name is 'image'
 
-        // Ensure quantity is a valid number string before parsing later
-        if (isNaN(parseInt(quantity, 10))) {
-            return NextResponse.json({ error: 'Invalid quantity provided' }, { status: 400 });
+        // --- Basic Input Validation ---
+        if (!productName || !quantityString || !unit) {
+            return NextResponse.json({ error: 'Missing required text fields (productName, quantity, unit)' }, { status: 400 });
         }
-       if (!imageFile) {
-            return NextResponse.json({ error: 'Missing image file' }, { status: 400 });
-       }
+        const quantity = parseInt(quantityString, 10);
+         if (isNaN(quantity) || quantity <= 0) {
+             return NextResponse.json({ error: 'Invalid quantity' }, { status: 400 });
+         }
+        // No validation for imageFile here, proceed even if missing
 
-        // --- Upload Image to IPFS via Pinata ---
-        let imageUrl = `/placeholder-${productName.toLowerCase()}.jpg`; // Default placeholder
-        let imageIpfsCid = null;
-        if (pinata && imageFile) {
-            console.log("Uploading image to Pinata...");
+        // --- Define batchId AFTER getting necessary fields ---
+        const batchId = `B-${uuidv4().slice(0, 8).toUpperCase()}`;
+
+        // --- Handle Image Upload (if present and Pinata configured) ---
+        if (imageFile && pinata) { // Only attempt if file exists AND pinata is initialized
+            console.log("FormData contains image file. Attempting IPFS upload via Pinata...");
             try {
-                // Create readable stream from File object's ArrayBuffer
-                const arrayBuffer = await imageFile.arrayBuffer();
-                const buffer = Buffer.from(arrayBuffer);
-                const stream = Readable.from(buffer);
+                 // Convert File to Buffer/ArrayBuffer which SDK might handle
+                 // Pinata SDK might prefer a readable stream, but let's try buffer first
+                 // Forcing stream: const stream = Readable.from(Buffer.from(await imageFile.arrayBuffer()));
+                 const buffer = Buffer.from(await imageFile.arrayBuffer());
 
-                const options = { /* ... pinata options ... */ };
-                const result = await pinata.pinFileToIPFS(stream, options); // Use the stream
+                const options = {
+                    pinataMetadata: {
+                        name: `${batchId}-${imageFile.name}`, // batchId is now defined
+                        // keyvalues: { batchId: batchId } // Example custom metadata
+                    },
+                    pinataOptions: {
+                        cidVersion: 0 // Or 1
+                    }
+                };
+                console.log("Uploading image buffer to Pinata...");
+
+                // Use pinata.pinFileToIPFS - check SDK requirements (stream vs buffer)
+                // Assuming pinata SDK needs a stream:
+                const stream = Readable.from(buffer);
+                stream.path = `${batchId}-${imageFile.name}`; // Some SDK versions might need path on stream
+
+                const result = await pinata.pinFileToIPFS(stream, options);
                 imageIpfsCid = result.IpfsHash;
                 imageUrl = `ipfs://${imageIpfsCid}`;
                 console.log("Image uploaded to IPFS via Pinata:", imageUrl);
-            } catch (pinataError) {
-               // ... Pinata error handling ...
-               console.error("Pinata upload failed:", pinataError);
-               console.warn("Proceeding without IPFS image due to upload failure.");
+
+            } catch (ipfsError: any) {
+                console.error("Pinata upload failed:", ipfsError?.message || ipfsError);
+                console.log("Proceeding without IPFS image due to upload failure.");
+                // Keep default placeholders for imageIpfsCid and imageUrl
             }
-        } else if (!pinata) {
-            console.warn("Pinata keys not configured. Skipping IPFS upload.");
+        } else if (imageFile && !pinata) {
+            console.log("Image file found, but Pinata is not configured. Skipping IPFS upload.");
+        } else {
+            console.log("No image file found in form data.");
         }
 
-
-        // --- Continue with Hedera, Prisma operations ---
-        const batchId = `B-${uuidv4().slice(0, 8).toUpperCase()}`;
+        // --- Define creationDate ---
         const creationDate = new Date();
 
+        // --- Initialize Hedera Client & Get IDs ---
+        // Ensure these are called AFTER potentially slow IPFS upload
         client = getHederaClient();
-        // ... (get platform details, HCS/NFT IDs) ...
-        console.log(">>> Using HCS Topic ID:", hcsTopicId.toString()); // Keep debug logs for now
-        console.log(">>> Using NFT Token ID:", nftTokenId.toString());
-
-        
-        // ... (get account IDs, keys, topic/token IDs) ...
         const platformAccountId = getPlatformAccountId();
         const platformPrivateKey = getPlatformPrivateKey();
-        const hcsTopicId = getHcsTopicId();
-        const nftTokenId = getNftTokenId();
-        console.log(">>> Using HCS Topic ID:", hcsTopicId.toString());
-        console.log(">>> Using NFT Token ID:", nftTokenId.toString());
-
+        const hcsTopicId = getHcsTopicId(); // Retrieve ID HERE
+        const nftTokenId = getNftTokenId(); // Retrieve ID HERE
+        console.log(">>> Using HCS Topic ID:", hcsTopicId.toString()); // Log AFTER retrieval
+        console.log(">>> Using NFT Token ID:", nftTokenId.toString()); // Log AFTER retrieval
 
         // --- 1. Submit Batch Creation Event to HCS ---
-        // Include image IPFS CID in HCS message
-        const hcsMessagePayload = {
+        const hcsMessage = JSON.stringify({
             eventId: uuidv4(),
             eventType: "BATCH_CREATED",
             batchId: batchId,
             timestamp: creationDate.toISOString(),
             farmerAccountId: farmerAccountIdString,
-            product: { name: productName, quantity: parseInt(quantity, 10), unit: unit, },
-            imageIpfsCid: imageIpfsCid, // Add image CID here
-            // ipfsCid: placeholderIpfsCid // Keep metadata CID separate?
-        };
-        const hcsMessage = JSON.stringify(hcsMessagePayload);
-        const hcsSubmitTx = await new TopicMessageSubmitTransaction({ topicId: hcsTopicId, message: hcsMessage }).freezeWith(client).sign(platformPrivateKey);
+            product: { name: productName, quantity: quantity, unit: unit },
+            ipfsImageUrl: imageUrl // Use the potentially updated imageUrl
+        });
+
+        const hcsSubmitTx = await new TopicMessageSubmitTransaction({
+            topicId: hcsTopicId, // Use the retrieved variable
+            message: hcsMessage,
+        }).setMaxChunks(1).freezeWith(client).sign(platformPrivateKey);
+
+        console.log("Submitting HCS message...");
         const hcsSubmitRx = await hcsSubmitTx.execute(client);
         const hcsReceipt = await hcsSubmitRx.getReceipt(client);
-        const hcsSequenceNumber = hcsReceipt.topicSequenceNumber;
-        console.log(`HCS Message Submitted: Sequence Number ${hcsSequenceNumber}`);
+        const hcsSequenceNumberLong = hcsReceipt.topicSequenceNumber; // This is Long | null
+        console.log(`HCS Message Submitted: Sequence Number ${hcsSequenceNumberLong?.toString() ?? 'N/A'}`);
 
 
         // --- Prepare Off-Chain Metadata JSON ---
         const offChainMetadata = {
             name: `Batch ${batchId} - ${productName}`,
             description: `AgriTrust registered batch of ${productName}`,
-            image: imageUrl, // Use the actual IPFS URL for the image
+            image: imageUrl, // Use the actual IPFS URL (or placeholder)
             creator: "AgriTrust Platform", type: "AgriTrust Batch",
             properties: {
-                batchId: batchId, hcsTopicId: hcsTopicId.toString(), hcsInitialSequence: hcsSequenceNumber?.toString(),
-                farmerAccountId: farmerAccountIdString, productType: productName, quantity: parseInt(quantity, 10), unit: unit,
+                batchId: batchId, hcsTopicId: hcsTopicId.toString(), hcsInitialSequence: hcsSequenceNumberLong?.toString(),
+                farmerAccountId: farmerAccountIdString, productType: productName, quantity: quantity, unit: unit,
                 creationTimestamp: creationDate.toISOString()
             }
         };
-        // TODO: Upload this offChainMetadata JSON to IPFS
-        const offChainIpfsCid = "bafkrei...placeholder_json_cid"; // Replace with real CID later
+        // TODO: Upload offChainMetadata JSON to IPFS
+        const offChainIpfsCid = "bafkrei...placeholder_json_cid"; // Placeholder JSON CID
 
 
         // --- Create MINIMAL On-Chain Metadata ---
@@ -188,42 +165,56 @@ export async function POST(request: NextRequest) {
 
 
         // --- 2. Mint the Batch NFT ---
-        const mintTx = await new TokenMintTransaction({ tokenId: nftTokenId, metadata: [nftMetadata] }).freezeWith(client).sign(platformPrivateKey);
+        const mintTx = await new TokenMintTransaction({
+            tokenId: nftTokenId, // Use the retrieved variable
+            metadata: [nftMetadata]
+        }).freezeWith(client).sign(platformPrivateKey);
+
+        console.log("Minting NFT...");
         const mintRx = await mintTx.execute(client);
         const mintReceipt = await mintRx.getReceipt(client);
-        const serialNumber = mintReceipt.serials[0];
-        const nftIdString = `${nftTokenId.toString()}/${serialNumber.toString()}`;
-        console.log(`NFT Minted: Token ID ${nftTokenId.toString()}, Serial Number ${serialNumber}`);
+        const serialNumberLong = mintReceipt.serials[0]; // This is Long
+        const nftIdString = `${nftTokenId.toString()}/${serialNumberLong.toString()}`;
+        console.log(`NFT Minted: Token ID ${nftTokenId.toString()}, Serial Number ${serialNumberLong.toString()}`);
 
 
         // --- (Skipping Self-Transfer Block) ---
 
         // --- 4. Store results in Database using Prisma ---
-        const hcsSequenceNumberLong = hcsReceipt.topicSequenceNumber;
-        const hcsSequenceNumberForDb: bigint | null = hcsSequenceNumberLong !== null ? BigInt(hcsSequenceNumberLong.toString()) : null;
+        // Convert Long | null to bigint | null for Prisma's BigInt? type
+        const hcsSequenceNumberForDb: bigint | null = hcsSequenceNumberLong ? BigInt(hcsSequenceNumberLong.toString()) : null;
 
+        console.log("Saving batch data to database...");
         const createdBatch = await prisma.batch.create({
             data: {
-                productName: productName, quantity: parseInt(quantity, 10), unit: unit, status: 'Registered',
-                creationDate: creationDate,
-                imageUrl: imageUrl, // Save the actual image URL (IPFS or placeholder)
-                nftId: nftIdString, hcsTopicId: hcsTopicId.toString(), hcsSequenceNumber: hcsSequenceNumberForDb,
-                ipfsMetadataCid: offChainIpfsCid, farmerAccountId: farmerAccountIdString,
+                // id is generated by cuid() default
+                productName: productName,
+                quantity: quantity,
+                unit: unit,
+                status: 'Registered',
+                creationDate: creationDate, // Store the Date object
+                imageUrl: imageUrl, // Save the actual image URL used
+                nftId: nftIdString,
+                hcsTopicId: hcsTopicId.toString(),
+                hcsSequenceNumber: hcsSequenceNumberForDb, // Use the converted bigint | null
+                ipfsMetadataCid: offChainIpfsCid, // Store the JSON metadata CID placeholder
+                farmerAccountId: farmerAccountIdString,
+                // productId: body.productId, // Add if available later
             }
         });
         console.log("Batch data saved to DB:", createdBatch.id);
 
 
-        // --- Invalidate Cache ---
+        // --- Invalidate Cache for the batches page ---
         revalidatePath('/farmer/batches');
         console.log("Cache revalidated for /farmer/batches");
 
 
-        // --- Prepare Response ---
+        // --- Prepare Response Data (Serialize BigInt/Date for JSON) ---
         const responseBatch = {
             ...createdBatch,
-            hcsSequenceNumber: createdBatch.hcsSequenceNumber?.toString(),
-            creationDate: createdBatch.creationDate.toISOString(),
+            hcsSequenceNumber: createdBatch.hcsSequenceNumber?.toString(), // Convert BigInt back to string for JSON
+            creationDate: createdBatch.creationDate.toISOString(), // Convert Date to ISO string for JSON
         };
 
 
@@ -231,22 +222,44 @@ export async function POST(request: NextRequest) {
         return NextResponse.json(responseBatch, { status: 201 });
 
     } catch (error: any) {
-        console.error("Batch Registration Failed:", error);
-        // ... (Prisma and Hedera error checks) ...
-         let errorMessage = 'Batch registration failed.';
-         if (error instanceof Prisma.PrismaClientKnownRequestError) { /* ... */ }
-         else if (error.message?.includes("INVALID_")) { /* ... */ } // Hedera specific errors
-         return NextResponse.json({ error: errorMessage, details: error.message || error }, { status: 500 });
+        console.error("Batch Registration Failed:", error); // Log the full error
+
+        let errorMessage = 'Batch registration failed.';
+        let errorDetails = error.message || error;
+        let statusCode = 500;
+
+        // Check for Prisma specific errors
+        if (error instanceof Prisma.PrismaClientKnownRequestError) {
+             console.error("Prisma Error Code:", error.code);
+             if (error.code === 'P2002') { // Unique constraint failed
+                errorMessage = `Database unique constraint failed. Check if NFT ID ${error.meta?.target} already exists.`;
+                statusCode = 409; // Conflict
+             } else {
+                errorMessage = `Database error occurred (Code: ${error.code}).`;
+             }
+             errorDetails = error.meta || error.message;
+        }
+        // Check for Hedera specific errors (using message includes for simplicity)
+        else if (error.message?.includes("INVALID_") || error.message?.includes("INSUFFICIENT_")) { // Common prefixes
+             errorMessage = `Hedera transaction failed: ${error.status ? error.status.toString() : error.message}`;
+             // Keep statusCode 500 or adjust based on error type if needed
+        }
+         // Add more specific error checks if needed
+
+         return NextResponse.json({ error: errorMessage, details: errorDetails }, { status: statusCode });
     } finally {
+        // Ensure Hedera client is closed if it was initialized
         client?.close();
+        console.log("Hedera client closed.");
     }
 }
 
 // --- GET Handler ---
 export async function GET(request: Request) {
-    // TODO: Implement Authentication and get farmerId
-    const farmerId = "0.0.5768282"; // Replace with authenticated farmer ID later
+    // TODO: Implement Authentication and get actual farmerId
+    const farmerId = "0.0.5768282"; // Hardcoded for now
 
+    console.log(`Fetching batches for farmer: ${farmerId}`);
     try {
         const batches = await prisma.batch.findMany({
             where: {
@@ -256,18 +269,18 @@ export async function GET(request: Request) {
                 creationDate: 'desc', // Show newest first
             },
         });
+        console.log(`Found ${batches.length} batches in DB.`);
 
-        // Convert BigInt to string for JSON serialization if needed (Prisma might handle this)
-        // Or handle on the frontend if necessary
+        // Convert BigInt to string for JSON serialization
         const serializedBatches = batches.map(batch => ({
             ...batch,
-            hcsSequenceNumber: batch.hcsSequenceNumber?.toString(), // Convert BigInt to string
+            hcsSequenceNumber: batch.hcsSequenceNumber?.toString(),
+            creationDate: batch.creationDate.toISOString(), // Also ensure date is serialized consistently
         }));
 
-
         return NextResponse.json(serializedBatches);
-    } catch (error) {
+    } catch (error: any) {
         console.error("Error fetching batches from DB:", error);
-        return NextResponse.json({ error: 'Failed to fetch batches' }, { status: 500 });
+        return NextResponse.json({ error: 'Failed to fetch batches', details: error.message }, { status: 500 });
     }
 }

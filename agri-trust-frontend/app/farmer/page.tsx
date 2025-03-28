@@ -58,10 +58,10 @@ async function getDashboardDataFromApi(): Promise<{
   
     // Assign icons locally as they are React components and not serializable in JSON
     const data = await res.json();
-    data.stats[0].icon = <FiPackage size={24}/>;
-    data.stats[1].icon = <FiCheckSquare size={24}/>;
-    data.stats[2].icon = <FiAlertCircle size={24}/>;
-    data.stats[3].icon = <FiTrendingUp size={24}/>;
+    // data.stats[0].icon = <FiPackage size={24}/>;
+    // data.stats[1].icon = <FiCheckSquare size={24}/>;
+    // data.stats[2].icon = <FiAlertCircle size={24}/>;
+    // data.stats[3].icon = <FiTrendingUp size={24}/>;
   
     return data;
   }
@@ -72,9 +72,6 @@ export default async function FarmerDashboardPage() {
     // Fetch data from the API endpoint
     const { stats, pendingActions, recentActivity } = await getDashboardDataFromApi();
   
-
-
-
   return (
     <div className="space-y-6">
       {/* Stat Cards Grid */}

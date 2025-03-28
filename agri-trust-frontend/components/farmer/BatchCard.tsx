@@ -19,7 +19,6 @@ function resolveIpfsUrl(url: string | null | undefined): string | null {
     return url;
 }
 
-
 // Function to get status color (unchanged)
 const getStatusColor = (status: Batch['status']): string => { /* ... */ };
 

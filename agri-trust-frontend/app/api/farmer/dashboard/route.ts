@@ -5,10 +5,11 @@ import { Stat, PendingAction, Activity } from '@/types';
 
 // SIMULATED DATABASE / DATA SOURCE
 const MOCK_STATS: Stat[] = [
-    { id: '1', title: 'Active Batches', value: 5, /* icon placeholder */ },
-    { id: '2', title: 'Batches Certified', value: 3, /* icon placeholder */ },
-    { id: '3', title: 'Needs Attention', value: 1, /* icon placeholder */ },
-    { id: '4', title: 'Monthly Sales', value: '$1,250', /* icon placeholder */ },
+    // Add an 'icon' string property
+    { id: '1', title: 'Active Batches', value: 5, icon: 'package' },
+    { id: '2', title: 'Batches Certified', value: 3, icon: 'check-square' },
+    { id: '3', title: 'Needs Attention', value: 1, icon: 'alert-circle' },
+    { id: '4', title: 'Monthly Sales', value: '$1,250', icon: 'trending-up' },
 ];
 
 const MOCK_PENDING_ACTIONS: PendingAction[] = [
@@ -34,9 +35,9 @@ export async function GET(request: Request) {
     // TODO: Fetch data from your database based on userId
     try {
         const data = {
-            stats: MOCK_STATS, // Replace with DB query
-            pendingActions: MOCK_PENDING_ACTIONS, // Replace with DB query
-            recentActivity: MOCK_RECENT_ACTIVITY, // Replace with DB query
+            stats: MOCK_STATS, // Use the updated mock stats
+            pendingActions: MOCK_PENDING_ACTIONS,
+            recentActivity: MOCK_RECENT_ACTIVITY,
         };
         return NextResponse.json(data);
     } catch (error) {

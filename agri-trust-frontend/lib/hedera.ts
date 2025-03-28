@@ -53,16 +53,14 @@ export function getPlatformPrivateKey(): PrivateKey {
 
 export function getHcsTopicId(): TopicId {
     const topicIdString = process.env.AGRITRUST_HCS_TOPIC_ID;
-    if (!topicIdString) {
-        // Throw error if not set at all
+    if (!topicIdString) { // Check if it's missing entirely
         throw new Error("AGRITRUST_HCS_TOPIC_ID not set in environment variables.");
     }
     try {
          return TopicId.fromString(topicIdString);
-    } catch (parseError) {
-         // Throw error if the format is wrong
-         console.error(`Failed to parse AGRITRUST_HCS_TOPIC_ID: ${topicIdString}`, parseError);
-         throw new Error(`Invalid format for AGRITRUST_HCS_TOPIC_ID in environment variables.`);
+    } catch (error) {
+        console.error(`Failed to parse AGRITRUST_HCS_TOPIC_ID ('${topicIdString}') as TopicId:`, error);
+        throw new Error("Invalid format for AGRITRUST_HCS_TOPIC_ID in environment variables.");
     }
 }
 
