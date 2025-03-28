@@ -96,10 +96,13 @@ export async function POST(request: NextRequest) {
                 imageUrl = `ipfs://${imageIpfsCid}`;
                 console.log("Image uploaded to IPFS via Pinata:", imageUrl);
 
-            } catch (ipfsError: any) {
+            } // In POST /api/farmer/batches, inside the catch block for Pinata upload:
+            catch (ipfsError: any) {
                 console.error("Pinata upload failed:", ipfsError?.message || ipfsError);
                 console.log("Proceeding without IPFS image due to upload failure.");
-                // Keep default placeholders for imageIpfsCid and imageUrl
+                // Set imageUrl to a valid local placeholder IF upload fails
+                imageUrl = "/placeholder.jpg"; 
+                imageIpfsCid = ""; // Clear IPFS CID if upload failed
             }
         } else if (imageFile && !pinata) {
             console.log("Image file found, but Pinata is not configured. Skipping IPFS upload.");
